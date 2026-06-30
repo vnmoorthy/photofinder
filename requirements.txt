@@ -1,0 +1,6 @@
+runpod-flash
+numpy
+pillow
+fastapi
+uvicorn
+requests
