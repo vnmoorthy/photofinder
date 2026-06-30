@@ -14,7 +14,7 @@ import json
 import os
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
 app = FastAPI(title="PhotoFinder")
@@ -83,6 +83,37 @@ def duplicates(threshold: float = 0.93):
             groups.append([int(x) for x in group])
             seen.update(group)
     return JSONResponse(groups)
+
+
+@app.get("/similar")
+def similar(i: int, k: int = 12):
+    """Image-to-image: photos most like photo `i`. Instant — no GPU call,
+    reuses the stored embeddings."""
+    if not load_index():
+        return JSONResponse({"error": "Index not built."}, status_code=400)
+    emb = _INDEX["emb"]
+    if i < 0 or i >= len(emb):
+        return JSONResponse({"error": "bad index"}, status_code=404)
+    sims = emb @ emb[i]
+    idx = [int(j) for j in np.argsort(-sims) if int(j) != i][:k]
+    return JSONResponse({"of": i, "results": [{"i": j, "score": round(float(sims[j]), 3)} for j in idx]})
+
+
+@app.post("/search_image")
+async def search_image(file: UploadFile = File(...), k: int = 18):
+    """Search-by-image: embed an uploaded photo on the GPU, find the closest."""
+    if not load_index():
+        return JSONResponse({"error": "Index not built."}, status_code=400)
+    import base64
+    data = await file.read()
+    b64 = base64.b64encode(data).decode()
+    from endpoints import clip_embed
+    r = await clip_embed(images_b64=[b64])
+    qv = np.array(r["image_embeddings"][0], dtype=np.float32)
+    sims = _INDEX["emb"] @ qv
+    idx = np.argsort(-sims)[:k]
+    hits = [{"i": int(i), "score": round(float(sims[i]), 3)} for i in idx]
+    return JSONResponse({"device": r.get("device", "GPU"), "results": hits})
 
 
 if __name__ == "__main__":

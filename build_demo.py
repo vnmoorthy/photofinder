@@ -67,6 +67,8 @@ async def main():
         "files": files,
         "queries": queries,
         "duplicates": groups,
+        # rounded image embeddings → client-side "find similar" on the static site
+        "embeddings": np.round(emb, 4).tolist(),
     }
     with open("docs/demo-data.json", "w") as f:
         json.dump(data, f)
