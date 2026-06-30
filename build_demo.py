@@ -17,11 +17,14 @@ import shutil
 import numpy as np
 
 EXAMPLES = [
-    "beach at sunset", "a dog", "food on a plate", "city at night",
-    "mountains", "someone smiling", "a cat", "coffee", "flowers", "snow",
+    "a dog", "a cat", "beach at sunset", "mountains", "city at night",
+    "food on a plate", "flowers", "a car", "coffee", "a forest",
+    "snow", "someone smiling",
 ]
-TOPK = 6
+TOPK = 8
 DUPE_THRESHOLD = 0.93
+REL_MARGIN = 0.04
+REL_FLOOR = 0.21
 
 
 async def main():
@@ -46,7 +49,11 @@ async def main():
     for q, tv in zip(EXAMPLES, tvecs):
         sims = emb @ tv
         idx = np.argsort(-sims)[:TOPK]
-        queries[q] = [{"file": files[i], "score": round(float(sims[i]), 3)} for i in idx]
+        hits = [{"file": files[i], "score": round(float(sims[i]), 3)} for i in idx]
+        if hits:
+            cutoff = max(REL_FLOOR, hits[0]["score"] - REL_MARGIN)
+            hits = [h for h in hits if h["score"] >= cutoff]
+        queries[q] = hits
 
     sims = emb @ emb.T
     n = len(emb)

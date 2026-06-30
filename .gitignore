@@ -21,3 +21,4 @@ sample_images/
 .DS_Store
 .idea/
 .vscode/
+.gstack/

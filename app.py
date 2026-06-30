@@ -21,6 +21,11 @@ app = FastAPI(title="PhotoFinder")
 
 _INDEX = {"emb": None, "paths": None}
 
+# Relevance cutoff for text search: keep the cluster near the top score and
+# hide the weak tail, so results read as "precise" instead of "1 match + noise".
+REL_MARGIN = 0.04
+REL_FLOOR = 0.21
+
 
 def load_index():
     if _INDEX["emb"] is None:
@@ -63,6 +68,9 @@ async def search(q: str, k: int = 18):
     sims = _INDEX["emb"] @ qv          # both sides are L2-normalized
     idx = np.argsort(-sims)[:k]
     hits = [{"i": int(i), "score": round(float(sims[i]), 3)} for i in idx]
+    if hits:
+        cutoff = max(REL_FLOOR, hits[0]["score"] - REL_MARGIN)
+        hits = [h for h in hits if h["score"] >= cutoff]
     return JSONResponse({"device": r.get("device", "GPU"), "results": hits})
 
 

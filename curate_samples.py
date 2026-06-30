@@ -1,10 +1,11 @@
 """
-Auto-curate a demo image set that ACTUALLY matches its labels.
+Auto-curate a RICH demo image set that actually matches its labels.
 
-A 'ralph loop': for each category we download several candidate photos, embed
-them on the Flash GPU with CLIP, and keep only an image whose similarity to its
-label clears a threshold — re-rolling until one does (or we run out of tries).
-This guarantees "a dog" really returns a dog, etc.
+A 'ralph loop': for each category we download many candidate photos, embed them
+on the Flash GPU with CLIP, and keep the TOP-N whose similarity to the label
+clears a threshold — re-rolling until we have enough (or run out of tries).
+Multiple images per concept means "a dog" returns a grid of dogs, not one dog
+plus noise.
 
     python curate_samples.py
 """
@@ -17,25 +18,24 @@ import urllib.request
 
 import numpy as np
 
-# (filename, label used to VERIFY + search, loremflickr tags)
+# (base name, label to VERIFY against, loremflickr tags)
 CATS = [
-    ("beach",    "a beach at sunset",        "beach,sunset"),
-    ("dog",      "a dog",                    "dog"),
-    ("pizza",    "a pizza on a plate",       "pizza"),
-    ("city",     "a city skyline at night",  "city,skyline,night"),
-    ("mountain", "a mountain landscape",     "mountain,landscape"),
-    ("portrait", "a smiling person",         "smiling,face,portrait"),
-    ("cat",      "a cat",                    "cat,kitten"),
-    ("coffee",   "a cup of coffee",          "coffee,cup"),
-    ("flower",   "a flower",                 "flower,blossom"),
-    ("forest",   "a forest",                 "forest,trees"),
-    ("car",      "a car",                    "car,automobile"),
-    ("ocean",    "ocean waves",              "ocean,waves,sea"),
-    ("snow",     "snow in winter",           "snow,winter"),
-    ("bicycle",  "a bicycle",                "bicycle,bike"),
+    ("dog",      "a photo of a dog",                "dog"),
+    ("cat",      "a photo of a cat",                "cat,kitten"),
+    ("beach",    "a beach at sunset",               "beach,sunset"),
+    ("mountain", "a mountain landscape",            "mountain,landscape"),
+    ("city",     "a city skyline at night",         "city,skyline,night"),
+    ("pizza",    "a pizza or food on a plate",      "pizza,food"),
+    ("flower",   "a flower",                        "flower,blossom"),
+    ("car",      "a car",                           "car,automobile"),
+    ("coffee",   "a cup of coffee",                 "coffee,cup"),
+    ("forest",   "a forest with trees",             "forest,trees"),
+    ("snow",     "snow in winter",                  "snow,winter"),
+    ("portrait", "a smiling person's face",         "smiling,face,portrait"),
 ]
-THRESHOLD = 0.24      # CLIP image-text cosine that counts as a confident match
-PER_ROUND = 3
+N_PER = 3            # keep this many verified images per category
+THRESHOLD = 0.23     # CLIP image-text cosine that counts as a confident match
+PER_ROUND = 5
 MAX_ROUNDS = 3
 
 
@@ -57,7 +57,7 @@ async def main():
 
     report = []
     for ci, (name, label, tags) in enumerate(CATS):
-        best_sim, best_data = -1.0, None
+        cands = []  # (sim, bytes)
         lock = ci * 1000 + 1
         for _ in range(MAX_ROUNDS):
             datas, b64s = [], []
@@ -69,27 +69,31 @@ async def main():
                 except Exception:
                     pass
                 lock += 1
-            if not b64s:
-                continue
-            E = np.array((await clip_embed(images_b64=b64s))["image_embeddings"], dtype=np.float32)
-            sims = E @ T[ci]
-            j = int(np.argmax(sims))
-            if sims[j] > best_sim:
-                best_sim, best_data = float(sims[j]), datas[j]
-            if best_sim >= THRESHOLD:
+            if b64s:
+                E = np.array((await clip_embed(images_b64=b64s))["image_embeddings"], dtype=np.float32)
+                sims = E @ T[ci]
+                cands += list(zip(sims.tolist(), datas))
+            strong = [c for c in cands if c[0] >= THRESHOLD]
+            if len(strong) >= N_PER:
                 break
-        with open(os.path.join("sample_images", f"{name}.jpg"), "wb") as f:
-            f.write(best_data)
-        ok = "OK  " if best_sim >= THRESHOLD else "WEAK"
-        report.append((name, label, best_sim, ok))
-        print(f"{ok} {name:9s} {label:24s} sim={best_sim:.3f}")
+        cands.sort(key=lambda c: -c[0])
+        keep = cands[:N_PER]
+        for n, (sim, data) in enumerate(keep, 1):
+            with open(os.path.join("sample_images", f"{name}{n}.jpg"), "wb") as f:
+                f.write(data)
+        sims_kept = [round(s, 3) for s, _ in keep]
+        weak = any(s < THRESHOLD for s, _ in keep)
+        report.append((name, sims_kept, weak))
+        print(f"{'WEAK' if weak else 'OK  '} {name:9s} kept={len(keep)} sims={sims_kept}")
 
-    # two exact copies of the beach winner so 'Find duplicates' has a real group
-    shutil.copy("sample_images/beach.jpg", "sample_images/dupe_a.jpg")
-    shutil.copy("sample_images/beach.jpg", "sample_images/dupe_b.jpg")
+    # exact-duplicate pair so 'Find duplicates' has a real group
+    if os.path.exists("sample_images/beach1.jpg"):
+        shutil.copy("sample_images/beach1.jpg", "sample_images/dupe_a.jpg")
+        shutil.copy("sample_images/beach1.jpg", "sample_images/dupe_b.jpg")
 
-    weak = [r for r in report if r[3] == "WEAK"]
-    print(f"\nCurated {len(report)} categories; {len(weak)} weak: {[w[0] for w in weak]}")
+    total = len(os.listdir("sample_images"))
+    weak = [r[0] for r in report if r[2]]
+    print(f"\nCurated {total} images across {len(CATS)} categories; weak: {weak or 'none'}")
 
 
 if __name__ == "__main__":
